@@ -7,8 +7,10 @@
         <sourceTestOutputDir name="target/generated-test-sources/test-annotations" />
         <outputRelativeToContentRoot value="true" />
         <module name="codex-stacktrimmer" />
-        <module name="codexstacktrimmer" />
       </profile>
     </annotationProcessing>
+    <bytecodeTargetLevel>
+      <module name="codex-stacktrimmer" target="1.8" />
+    </bytecodeTargetLevel>
   </component>
 </project>
