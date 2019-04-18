@@ -40,7 +40,7 @@ public class Main {
 
         System.out.println("sourceDir = " + sourceDir);
 
-        System.out.println("destDir = " + sourceDir);
+        System.out.println("destDir = " + destDir);
 
         File mapFile = new File(destDir+"/"+ "ConcatenationMap.txt");
 
@@ -158,7 +158,7 @@ public class Main {
                 boolean missingFolders = false;
                 for (int i = 1; i <= maxXValue; i++) {
                     for (int j = 1; j <= maxYValue ; j++) {
-                        Path currTileDir = destDir.resolve(String.format("reg%03d_X%02d_Y02d", newRegIDX, i, j));
+                        Path currTileDir = destDir.resolve(String.format("reg%03d_X%02d_Y%02d", newRegIDX, i, j));
 
 
                         if(!Files.exists(currTileDir)){
