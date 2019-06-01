@@ -17,6 +17,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 
+import ij.IJ;
 import ij.ImagePlus;
 import org.apache.commons.lang3.tuple.*;
 
@@ -94,6 +95,10 @@ public class Main {
             }
         });
 
+
+        tileMap.println("RegionNumber\tTileX\tTileY\tXposition\tYposition");
+
+
         expRegTiles.entrySet().stream().sorted(Comparator.comparing(o->o.getKey())).forEach(exp->{
             System.out.println("Working on experiment:" + exp.getKey());
 
@@ -121,48 +126,51 @@ public class Main {
                 bw.flush();
 
 
-                if(newRegIDX < startingRegion){
+                if(true || newRegIDX < startingRegion){
                     System.out.println("Skipping region: " + newRegIDX);
-                    return;
+
+                }else {
+                    System.out.println("Copying region: " + newRegIDX);
+                    region.getValue().forEach(tileFolder -> {
+                        String oldRegSubstring = String.format("reg%03d", region.getKey());
+                        String newRegSubstring = String.format("reg%03d", newRegIDX);
+                        Path newTileDir = destDir.resolve(tileFolder.subpath(tileFolder.getNameCount() - 3, tileFolder.getNameCount())).resolveSibling(tileFolder.getFileName().toString().replace(oldRegSubstring, newRegSubstring));
+                        try {
+                            Files.createDirectories(newTileDir);
+                            System.out.println("Dir created:" + newTileDir);
+                        } catch (Exception ex) {
+                            ex.printStackTrace();
+                        }
+
+                        System.out.println("Working on a dir: " + tileFolder.toString());
+
+                        try {
+                            System.out.println("Copying files: " + tileFolder);
+                            copyZStackSubset(tileFolder, newTileDir, keepZSlizes, bestFocus, mt, oldRegSubstring, newRegSubstring);
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                            errors.println("Error copying tile folder:" + tileFolder);
+                            e.printStackTrace(errors);
+                            errors.println();
+                            errors.flush();
+                        }
+                    });
+
+                    bw.flush();
+                    bw.close();
+
                 }
-
-                region.getValue().forEach(tileFolder->{
-                    String oldRegSubstring = String.format("reg%03d",region.getKey());
-                    String newRegSubstring  = String.format("reg%03d",newRegIDX);
-                    Path newTileDir = destDir.resolve(tileFolder.subpath(tileFolder.getNameCount()-3, tileFolder.getNameCount())).resolveSibling(tileFolder.getFileName().toString().replace(oldRegSubstring,newRegSubstring));
-                    try{
-                        Files.createDirectories(newTileDir);
-                        System.out.println("Dir created:" + newTileDir);
-                    }catch (Exception ex){
-                        ex.printStackTrace();
-                    }
-
-                    System.out.println("Working on a dir: "+ tileFolder.toString());
-
-                    try {
-                        System.out.println("Copying files: "+ tileFolder);
-                        copyZStackSubset(tileFolder, newTileDir, keepZSlizes, bestFocus, mt, oldRegSubstring, newRegSubstring);
-                    }catch (Exception e){
-                        e.printStackTrace();
-                        errors.println("Error copying tile folder:"+ tileFolder);
-                        e.printStackTrace(errors);
-                        errors.println();
-                        errors.flush();
-                    }
-                });
-
-                bw.flush();
-                bw.close();
 
                 //Checking missing folders
                 boolean missingFolders = false;
                 for (int i = 1; i <= maxXValue; i++) {
                     for (int j = 1; j <= maxYValue ; j++) {
-                        Path currTileDir = destDir.resolve(String.format("reg%03d_X%02d_Y%02d", newRegIDX, i, j));
+                        Path currTileDir = destDir.resolve("processed").resolve("tiles").resolve(String.format("reg%03d_X%02d_Y%02d", newRegIDX, i, j));
 
 
                         if(!Files.exists(currTileDir)){
                             errors.println("Error: missing tile folder:"+ currTileDir);
+                            errors.flush();
                             missingFolders=true;
                         }
 
@@ -170,6 +178,8 @@ public class Main {
                             Optional<Path> img = Files.find(currTileDir, 1,  (filePath, fileAttr) ->  filePath.getFileName().toString().endsWith(".tif")).findFirst();
                             if(!img.isPresent()){
                                 errors.println("Error: empty tile folder:"+ currTileDir);
+                                errors.flush();
+
                                 missingFolders=true;
                             }
                         }catch (IOException e){
@@ -180,30 +190,31 @@ public class Main {
                 }
 
                 if(missingFolders){
+                    errors.close();
                     throw new IllegalStateException("There are missing folders. Cannot continue. Check the failedTiles.log in the destination directory");
                 }
-
-                tileMap.println("RegionNumber\tTileX\tTileY\tXposition\tYposition");
 
                 int xOffset = 0;
                 int yOffset = 0;
                 for (int i = 1; i <= maxXValue; i++) {
                     int maxTileH = 0;
                     for (int j = 1; j <= maxYValue ; j++) {
-                        Path currTileDir = destDir.resolve(String.format("reg%03d_X%02d_Y02d", newRegIDX, i, j));
+                        Path currTileDir =  destDir.resolve("processed").resolve("tiles").resolve(String.format("reg%03d_X%02d_Y%02d", newRegIDX, i, j));
                         try{
                             Optional<Path> img = Files.find(currTileDir, 1,  (filePath, fileAttr) ->  filePath.getFileName().toString().endsWith(".tif")).findFirst();
                             if(img.isPresent()){
-                                BufferedImage bi = ImageIO.read(img.get().toFile());
-                                int w = bi.getWidth();
-                                int h = bi.getHeight();
+                                ImagePlus imp = IJ.openImage(img.get().toString());
+                                int w = imp.getWidth();
+                                int h = imp.getHeight();
 
                                 maxTileH = Math.max(h,maxTileH);
 
                                 tileMap.println(String.format("%d\t%d\t%d\t%d\t%d", newRegIDX, i, j, xOffset,yOffset));
+                                tileMap.flush();
                                 xOffset += w;
                             }else{
                                 errors.println("Error: empty tile folder:"+ currTileDir);
+                                errors.flush();
                                 throw new IllegalStateException("Error: empty tile folder:"+ currTileDir);
                             }
                         }catch (IOException e){
@@ -233,8 +244,12 @@ public class Main {
             try{
                 return (Pair<Integer, BufferedImage>)Pair.of(Integer.parseInt(p.getFileName().toString().split("_z")[1].substring(0,3)),ImageIO.read(p.toFile()));
             }catch (Exception e){
-                e.printStackTrace();
-                return (Pair<Integer, BufferedImage>)Pair.of(Integer.parseInt(p.getFileName().toString().split("_z")[1].substring(0,3)),(BufferedImage)null);
+                try {
+                    return (Pair<Integer, BufferedImage>) Pair.of(Integer.parseInt(p.getFileName().toString().split("_z")[1].substring(0, 3)), ImageIO.read(p.toFile()));
+                }catch (Exception e2) {
+                    e2.printStackTrace();
+                    return (Pair<Integer, BufferedImage>) Pair.of(Integer.parseInt(p.getFileName().toString().split("_z")[1].substring(0, 3)), (BufferedImage) null);
+                }
             }}).sorted(Comparator.comparing(p->p.getLeft())).toArray(Pair[]::new);
         Pair<Integer, Double>[] means = Arrays.stream(list).map(p->
             Pair.of(p.getLeft(), new ImagePlus("zSlice"+p.getLeft(), p.getValue()).getStatistics().mean)
@@ -321,12 +336,15 @@ public class Main {
                                             Files.copy(f, newFilePath);
                                             //System.out.println("file copied:" + f + " to " + newFilePath);
                                         }catch (Exception e){
+                                            do{
                                             try{
+                                                Thread.sleep(1000);
                                                 Files.copy(f, newFilePath);
                                                 System.out.println("file copied:" + f + " to " + newFilePath);
                                             }catch (Exception e2){
                                                 e.printStackTrace();
                                             }
+                                            }while (!Files.exists(newFilePath));
                                         }
                                     }
                             );
