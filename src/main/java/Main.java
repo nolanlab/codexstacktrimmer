@@ -16,12 +16,19 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import ij.IJ;
 import ij.ImagePlus;
 import org.apache.commons.lang3.tuple.*;
 
 public class Main {
+
+    private static int [] channelOffsets = new int[]{0,1,1,1};
+
+    private static final int maxCycle = 21;
+    private static final int maxCh = 4;
+    private static final int maxZ = 21;
 
     public static void main(String [] args) throws Exception{
 
@@ -235,10 +242,11 @@ public class Main {
         System.exit(0);
     }
 
-    private static int findBestZMaxIntensity(Path tileFolder, int bandwidth) throws IOException{
+    private static int findBestZMaxIntensity(Path tileFolder, int bandwidth, int cycle) {
+        try {
         Pair<Integer, BufferedImage>[] list = Files.find(tileFolder, 1, (filePath, fileAttr) -> {
-            String name = filePath.getFileName().toString();
-            return name.contains("_c001")&&name.contains("_t002");
+                String name = filePath.getFileName().toString();
+                return name.contains("_c001") && name.contains(String.format("_t%03d", cycle));
         }
         ).map(p->{
             try{
@@ -276,6 +284,11 @@ public class Main {
             }
         }
         return maxIndex;
+
+        }catch (IOException ex){
+            ex.printStackTrace();
+            return -1;
+        }
     }
 
     private static void copyZStackSubset(Path tileFolder, Path destTileFolder, int keepZSlizes, Path bestFocusFolder, int numThreads, String oldRegSubstring, String newRegSubstring){
@@ -288,71 +301,81 @@ public class Main {
             if(o.isPresent()){
                 System.out.println("bestFocus tiff found:"+ o.get().getFileName().toString());
 
-                int bestZ_old = Integer.parseInt(o.get().getFileName().toString().split("_Z")[1].substring(0,2));
+
+                for (int cyc = 1; cyc <= maxCycle; cyc++) {
+                    int bestZ = findBestZMaxIntensity(tileFolder, keepZSlizes, cyc);
 
 
+                    int range = keepZSlizes/2;
 
-                int bestZ = findBestZMaxIntensity(tileFolder, keepZSlizes);
+                    if(bestZ-range<1){
+                        bestZ=range+1;
+                    }
+                    if(bestZ+range>maxZ){
+                        bestZ = maxZ-range;
+                    }
 
 
-                System.out.println("bestZ byProcessor:"+bestZ_old+", byIntensity:"+bestZ);
+                    for (int ch = 1; ch < maxCh; ch++) {
 
-                Map<Integer, List<Path>> mapByZ = Files.find(tileFolder, 1, (filePath, fileAttr) -> filePath.getFileName().toString().endsWith(".tif")).collect(Collectors.groupingBy(
-                        f->Integer.parseInt(f.getFileName().toString().split("_z")[1].substring(0,3))
-                ));
+                        final int channel = ch;
+                        final int cycle = cyc;
+                        final int correctedBestZ = bestZ + channelOffsets[ch-1];
 
-                Optional<Integer> maxZOpt = mapByZ.keySet().stream().max(Comparator.naturalOrder());
-                int maxZ = maxZOpt.get();
+                        int zOffset = (correctedBestZ-range)-1;
 
-                System.out.println("maxZ = " + maxZ);
 
-                int range = keepZSlizes/2;
+                        Map<Integer, List<Path>> mapByZ = Files.find(tileFolder, 1, (filePath, fileAttr) -> {
+                            String name = filePath.getFileName().toString();
+                            return name.contains(String.format("_t%03d",cycle))&name.contains(String.format("_c%03d",channel)) & name.endsWith(".tif");
+                        }).collect(Collectors.groupingBy(
+                                f->Integer.parseInt(f.getFileName().toString().split("_z")[1].substring(0,3))
+                        ));
 
-                if(bestZ-range<1){
-                    bestZ=range+1;
-                }
-                if(bestZ+range>maxZ){
-                    bestZ = maxZ-range;
-                }
+                        List<Runnable> renamingTasks = new ArrayList<>();
 
-                int zOffset = (bestZ-range)-1;
+                        for (int i = correctedBestZ-range; i <= correctedBestZ+range; i++) {
+                                final int currI = i;
+                                mapByZ.get(i).forEach((f)->{
+                                    //
+                                    renamingTasks.add(()-> {
+                                                int newZ = currI-zOffset;
 
-                List<Runnable> renamingTasks = new ArrayList<>();
+                                                int oldZ = currI;
+                                                if(oldZ<1)oldZ=1;
+                                                if(oldZ>maxZ) oldZ = maxZ;
 
-                for (int i = 1; i <= maxZ; i++) {
-                    final int currI = i;
-                    if(Math.abs(i-bestZ)<=range){
-                        mapByZ.get(i).forEach((f)->{
+                                                Path newFilePath = destTileFolder.resolve(f.getFileName().toString().replace(String.format("_z%03d",oldZ),String.format("_z%03d",newZ)).replace(oldRegSubstring,newRegSubstring));
+                                                if(Files.exists(newFilePath)){
+                                                    //System.out.println("skipping file that already exists:" + newFilePath);
+                                                    return;
+                                                }
 
-                            //
-                            renamingTasks.add(()-> {
-                                        Path newFilePath = destTileFolder.resolve(f.getFileName().toString().replace(String.format("_z%03d",currI),String.format("_z%03d",currI-zOffset)).replace(oldRegSubstring,newRegSubstring));
-                                        if(Files.exists(newFilePath)){
-                                            //System.out.println("skipping file that already exists:" + newFilePath);
-                                            return;
-                                        }
-
-                                        try{
-                                            Files.copy(f, newFilePath);
-                                            //System.out.println("file copied:" + f + " to " + newFilePath);
-                                        }catch (Exception e){
-                                            do{
-                                            try{
-                                                Thread.sleep(1000);
-                                                Files.copy(f, newFilePath);
-                                                System.out.println("file copied:" + f + " to " + newFilePath);
-                                            }catch (Exception e2){
-                                                e.printStackTrace();
+                                                try{
+                                                    Files.copy(f, newFilePath);
+                                                    //System.out.println("file copied:" + f + " to " + newFilePath);
+                                                }catch (Exception e){
+                                                    do{
+                                                        try{
+                                                            Thread.sleep(1000);
+                                                            Files.copy(f, newFilePath);
+                                                            System.out.println("file copied:" + f + " to " + newFilePath);
+                                                        }catch (Exception e2){
+                                                            e.printStackTrace();
+                                                        }
+                                                    }while (!Files.exists(newFilePath));
+                                                }
                                             }
-                                            }while (!Files.exists(newFilePath));
-                                        }
-                                    }
-                            );
-                        });
+                                    );
+                                });
+                        }
+
+                        renamingTasks.forEach(t->es_copy.submit(t));
                     }
                 }
 
-                renamingTasks.forEach(t->es_copy.submit(t));
+
+
                 es_copy.shutdown();
                 try{
                     es_copy.awaitTermination(1, TimeUnit.DAYS);
